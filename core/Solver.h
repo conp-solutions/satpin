@@ -297,6 +297,11 @@ class Solver
     vec<char> necessary;       // remember which variables are necessary (for conflict minimization)
     vec<Lit> assumptionBackup; // backup current assumption vector(for conflict minimization)
 
+    /** try to minimize the current conflict with the current question literal
+     *
+     */
+    bool minimizeCurrentConflict(const Lit questionLit);
+
     /** integrate the given clause into the current state of the SAT solver
      *  @param clause vector with the literals of the clause
      *  @param modelClause use this clause for enumerating models, if the used mode is the enumeration mode

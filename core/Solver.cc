@@ -1038,6 +1038,67 @@ lbool Solver::integrateNewClause(vec<Lit> &clause, bool modelClause)
     return l_True;
 }
 
+
+bool Solver::minimizeCurrentConflict(const Lit questionLit)
+{
+    const int oldConflictSize = conflict.size();
+    necessary.clear();                    // remove previously stored data
+    necessary.growTo(nVars(), 0);         // initialize for all variables with 0
+    assumptions.moveTo(assumptionBackup); // backup current set of assumptions
+
+    conflict.moveTo(assumptions);
+    for (int i = 0; i < assumptions.size(); ++i) { // automatically reversed :)
+        if (assumptions[i] != ~questionLit) {
+            assumptions[i] = ~assumptions[i]; // negate all literals
+        } else {                              // remove the questionlit literal from the initial assumption vector again
+            assumptions[i] = ~assumptions.last(); // move last literal forward, and negate it
+            assumptions.shrink(1);                // remove the duplicate
+        }
+    }
+
+    int keepLits = 0;
+    cancelUntil(0); // have to start from scratch
+    while (keepLits < assumptions.size()) {
+        if (necessary[var(assumptions[keepLits])]) {
+            keepLits++;
+            continue;
+        } // jump over literals that are necessary
+
+        Lit toCheck = assumptions[keepLits];        // literal to be checked
+        assumptions[keepLits] = assumptions.last(); // move last literal forward
+        assumptions.last() = questionLit;           // add question lit as last literal
+        assert(decisionLevel() == 0 && "can do intermediate calls only at level 0");
+        lbool ret = solveLimited_(); // check whether this subset results in an error
+        cancelUntil(0);              // have to start from scratch
+        minimalChecks++;             // stats
+
+        if (ret == l_True) { // literal is necessary (could do model rotation here, but since we have group MUS, its assumed to be inefficient
+            necessary[var(toCheck)] = 1;                // memorize
+            assumptions.last() = assumptions[keepLits]; // restore assumptions vector
+            assumptions[keepLits] = toCheck;            // and add necessary literal back
+        } else {                                        // literal is not necessary
+            minimizations++;
+
+            conflict.moveTo(assumptions); // move new conflict vector to assumptions vector
+            for (int i = 0; i < assumptions.size(); ++i) {
+                if (assumptions[i] != ~questionLit) {
+                    assumptions[i] = ~assumptions[i]; // negate all literals
+                } else { // remove the questionlit literal from the initial assumption vector again
+                    assumptions[i] = ~assumptions.last(); // move last literal forward, and negate it
+                    assumptions.shrink(1);                // remove the duplicate
+                }
+            }
+            keepLits = 0; // start scan from the beginning, but necessary literals are restored
+        }
+    }
+
+    assumptions.moveTo(conflict);                                         // move final assumptions back
+    for (int i = 0; i < conflict.size(); ++i) conflict[i] = ~conflict[i]; // negate all literals
+    assumptionBackup.moveTo(assumptions);                                 // restore previous assumptions vector
+
+    return conflict.size() < oldConflictSize; // return whether the conflict has been minimized
+}
+
 void Solver::toGroupMUS(const char *file, const vec<Lit> &assumps, const Lit questionLit)
 {
     int gcnfvariables = nVars();
