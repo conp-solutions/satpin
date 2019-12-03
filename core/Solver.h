@@ -61,8 +61,14 @@ class Solver
     bool simplify();                     // Removes already satisfied clauses.
     bool solve(const vec<Lit> &assumps); // Search for a model that respects a given set of assumptions.
     lbool solveLimited(const vec<Lit> &assumps); // Search for a model that respects a given set of assumptions (With resource constraints).
-    bool solve();                                // Search without assumptions.
-    bool solve(Lit p);                           // Search for a model that respects a single assumption.
+
+    /* Norbert
+     * consider the given set of assumptions of the solver, do not copy the assumptions!
+     */
+    lbool solveLimited_(); // Search for a model that respects a given set of assumptions (With resource constraints).
+
+    bool solve();                    // Search without assumptions.
+    bool solve(Lit p);               // Search for a model that respects a single assumption.
     bool solve(Lit p, Lit q);        // Search for a model that respects two assumptions.
     bool solve(Lit p, Lit q, Lit r); // Search for a model that respects three assumptions.
     bool okay() const;               // FALSE means solver is in a conflicting state
@@ -283,6 +289,17 @@ class Solver
      *  have assumption modification option as object attribute
      */
     bool imply_check; // have the extra check for assumptions
+
+    public:
+    /** find all subsets of assumps which imply questionLit wrt the current formula
+     *  @param assump vector of assumption literals
+     *  @param questionLit literal that should be implied
+     *  @param rotate how to enumerate (find all smallest sets, or enumerate a full DNF)
+     *  @return l_False, if everything worked out, l_Undef, if procedure has been interrupted, l_True, if no subset has been found
+     */
+    lbool findImplications(vec<Lit> &assumps, Lit questionLit, int rotate);
+
+    protected:
     // build all models based on specialized clauses
     bool generateClauseModels;                 // use a different pickBranchLit method
     vec<int> pickedAlready;                    // memorize which literals have been used already as decision variable
@@ -302,12 +319,33 @@ class Solver
      */
     bool minimizeCurrentConflict(const Lit questionLit);
 
+    /** return the next decision literal based on the state of pickedAlready and pickBlocks
+     *  returns lit_Undef, if all combinations for the relevant clause have been created already
+     * @return a decision literal, or lit_Undef, if a model has been found, and lit_Error, if all combinations have been enumerated
+     */
+    Lit pickClauseBranchLit();
+
     /** integrate the given clause into the current state of the SAT solver
      *  @param clause vector with the literals of the clause
      *  @param modelClause use this clause for enumerating models, if the used mode is the enumeration mode
      *  @return l_False, if adding the clause turns the formula of the solver unsatisfiable, l_True, if addig the clause did not fail
      */
     lbool integrateNewClause(vec<Lit> &clause, bool modelClause = false);
+
+    /** generate the next model, given the current state
+     *  if the current trail satisfies the current formula, then disallow the current interpretation with a decision
+     * clause, and continue from there the search does not restart as in usual CDCL search
+     * @return l_True, if another model has been found, l_False, if the given formula is unsatisfiable
+     */
+    lbool generateNextModel();
+
+    /** remove all clauses and assumptions from the formula, that are irrelevant to find the implications for questionLit
+     *  @param assumps vector of assumptions that is used (might be modified during the process)
+     *  @param questionLit literal that should be implied (that turns the formula into being unsatisfiable)
+     *  @param removedClauses pointer to vector that should store the removed clasues
+     */
+    void removeIrrelevantClauses(vec<Lit> &assumps, const Lit questionLit, vec<Lit> *removedClauses = 0);
+
 
     public:
     /** convert enumeration of all implications into an all-group-MUS problem

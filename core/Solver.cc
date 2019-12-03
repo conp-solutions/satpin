@@ -24,6 +24,8 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "core/Solver.h"
 #include "mtl/Sort.h"
 
+#include "core/SATSolver.h"
+
 using namespace Minisat;
 
 #include "utils/System.h" // for the cputime
@@ -536,6 +538,11 @@ CRef Solver::propagate()
         Watcher *i, *j, *end;
         num_props++;
 
+        if (localDebug) {
+            cerr << "c [localDebug] propagate " << p << " with reason [" << reason(var(p)) << "]" << endl;
+            if (reason(var(p)) != CRef_Undef) cerr << "c [localDebug] reason clause " << ca[reason(var(p))] << endl;
+        }
+
         for (i = j = (Watcher *)ws, end = i + ws.size(); i != end;) {
             // Try to avoid inspecting the clause:
             Lit blocker = i->blocker;
@@ -700,6 +707,8 @@ lbool Solver::search(int nof_conflicts)
     vec<Lit> learnt_clause;
     starts++;
 
+    artificialSatLevel = -1; // reset the level before another search!
+
     for (;;) {
         CRef confl = propagate();
         if (confl != CRef_Undef) {
@@ -741,7 +750,11 @@ lbool Solver::search(int nof_conflicts)
             if (nof_conflicts >= 0 && conflictC >= nof_conflicts || !withinBudget()) {
                 // Reached bound on number of conflicts:
                 progress_estimate = progressEstimate();
-                cancelUntil(0);
+                if (!opt_keepSearch) // do not jump over the assumptions
+                    cancelUntil(0);
+                else {
+                    cancelUntil(assumptions.size()); // if current level is lower, than the routine takes care!
+                }
                 return l_Undef;
             }
 
@@ -753,17 +766,48 @@ lbool Solver::search(int nof_conflicts)
                 reduceDB();
 
             Lit next = lit_Undef;
+
+            /* Norbert
+             * for the imply check, always test the question literal, before using the next assumption! (not necessary, but should improve the average run time)
+             */
+            if (opt_imply_check && decisionLevel() < assumptions.size()) {
+                assert(assumptions.size() > 0 && "this assertion must hold, because we entered the then-path");
+                const Lit p = assumptions[assumptions.size() - 1]; // consider the questionable literal
+                if (value(p) == l_False) {
+                    // 		printf("assuming question %s%d failed at level %d\n", sign(p) ? "-" : "", var(p)+1, assumptions.size() - 1, decisionLevel() );
+                    analyzeFinal(~p, conflict);
+                    return l_False;
+                }
+            }
+
+
             while (decisionLevel() < assumptions.size()) {
+
                 // Perform user provided assumption:
                 Lit p = assumptions[decisionLevel()];
-                if (value(p) == l_True) {
+
+                /* Norbert
+                 * ignore if an assumption is violated already, if it is not the very last assumption literal
+                 * if the value of the assumption is false, but its not the very last assumption, act as the assumption is not in the list
+                 */
+                if ((value(p) == l_True)
+#if 0
+                  || (    opt_imply_check                            // but we have the option enabled to ignore the literal,
+                       && decisionLevel() != assumptions.size() - 1  // if this literal is not the last assumption literal in the list
+                       && value(p) == l_False                        // just check whether we have false here
+		     )
+#endif
+                ) {
                     // Dummy decision level:
+                    //                     printf("ignore assumption %s%d (assumption %d)\n", sign(p) ? "-" : "", var(p)+1, decisionLevel());
                     newDecisionLevel();
                 } else if (value(p) == l_False) {
+                    // 		    printf("assuming %s%d failed (assumption %d)\n", sign(p) ? "-" : "", var(p)+1, decisionLevel());
                     analyzeFinal(~p, conflict);
                     return l_False;
                 } else {
                     next = p;
+                    // 		    printf("assuming %s%d (at level %d)\n", sign(p) ? "-" : "", var(p)+1, decisionLevel());
                     break;
                 }
             }
@@ -771,11 +815,45 @@ lbool Solver::search(int nof_conflicts)
             if (next == lit_Undef) {
                 // New variable decision:
                 decisions++;
-                next = pickBranchLit();
 
-                if (next == lit_Undef)
+                if (generateClauseModels) {
+                    next = pickClauseBranchLit(); // use a specialized decision heuristic, to be able to stop model enumeration much faster
+                    if (next == lit_Undef) {
+                        if (opt_eldbg) {
+                            cerr << "c create an artificial model based on the generate clause models method -- set "
+                                    "all variables positive, and not as decision"
+                                 << endl;
+                        }
+                        if (opt_eldbg) cerr << "c found formula to be satisfied at level " << decisionLevel() << endl;
+                        artificialSatLevel = decisionLevel();
+                        for (Var v = 0; v < nVars(); ++v) { // create artificial model with extra decision levels
+                            if (value(v) == l_Undef) {
+                                newDecisionLevel();
+                                uncheckedEnqueue(mkLit(v, false), CRef_Undef); // satisfy all variables
+                            }
+                        }
+                        order_heap.clear(); // and remove all variables from the decision heap
+
+                        if (generateClauseModels && opt_eldbg) {
+                            cerr << "c [modelclause] return model " << trail << endl;
+                        }
+                        return l_True; // return to the calling method that we found a model
+                    }
+                } else
+                    next = pickBranchLit();
+                //
+                //		if( next != lit_Undef ) cerr << "c decide " << next << "@" << decisionLevel() + 1 << endl;
+
+                if (next == lit_Error) // enumerated all possible models based on the pickBlocks
+                    return l_False;
+
+                if (next == lit_Undef) {
                     // Model found:
+                    if (generateClauseModels && opt_eldbg) {
+                        cerr << "c [modelclause] return model " << trail << endl;
+                    }
                     return l_True;
+                }
             }
 
             // Increase decision level and enqueue 'next'
@@ -830,6 +908,146 @@ static double luby(double y, int x)
     return pow(y, seq);
 }
 
+
+/* Norbert
+ * modifications for model enumeration and implication checks
+ */
+Lit Solver::pickClauseBranchLit()
+{
+    int pickLevel = 0; // level of the block that is satisfied with the next decision
+
+    if (opt_eldbg) cerr << "c PICK TRAIL: " << trail << endl;
+
+    int satisfiedByOwnDecision = 0; // determine the actual comparison level, starts with 1
+
+    while (pickLevel < pickedAlready.size()) {
+        const vector<Lit> &block = pickBlocks[pickLevel]; // work with current block
+        satisfiedByOwnDecision++;                         // next block satisfies itself at the next higher level
+
+        if (opt_eldbg)
+            cerr << "c check block " << block << " at level " << pickLevel << " with pick " << pickedAlready[pickLevel] << endl;
+        // check whether this clause is already satisfied due to checks that have been performed before
+        bool blockIsSat = false;
+        for (int j = 0; j < block.size(); ++j) {
+            if (value(block[j]) == l_True) {
+                blockIsSat = true;
+                break;
+            }
+        }
+        if (blockIsSat) { // found satisfied block
+            if (opt_eldbg) cerr << "c satisfied block at level " << pickLevel << " : " << block << endl;
+
+            bool satisfiedBefore =
+            false; // check whether this constraint is irrelevant in the current sub-tree, hence, ignore this constraint
+            for (int i = 0; i < block.size(); ++i) {
+                if (value(block[i]) == l_True && satisfiedByOwnDecision > level(var(block[i]))) {
+                    satisfiedByOwnDecision--;
+                    satisfiedBefore = true;
+                    break;
+                }
+            }
+            if (satisfiedBefore) { //
+                int updateLevel = pickLevel + 1;
+                if (pickedAlready[pickLevel] < block.size()) {
+                    pickedAlready[pickLevel] =
+                    block.size(); // indicate that this constraint wrt the current sub tree has been handled completely
+                    for (; updateLevel < pickBlocks.size(); ++updateLevel) // for all blocks deeper in the tree, after backtracking
+                        pickedAlready[updateLevel] = 0; // the first literal has to be considered again
+                    satTreeFastForward++;               // count number of occurrences for this situation
+                }
+            } else {
+                bool foundImpliedFalse = false; // check whether we can go fast forward in the tree
+                for (; pickedAlready[pickLevel] < block.size();
+                     pickedAlready[pickLevel]++) { // otherwise increase the counter of the current level
+                    if (value(block[pickedAlready[pickLevel]]) != l_False // if the literal is not false
+                        || level(var(block[pickedAlready[pickLevel]])) >
+                           pickLevel // or is assigned at a higher level then the corresponding decision level
+                    )
+                        break; // found a literal that is still free
+                    else {
+                        foundImpliedFalse = true;
+                        unsatTreeFastForward++; // count number of occurrences for this situation
+                    }
+                }
+                if (foundImpliedFalse) {
+                    int updateLevel = pickLevel + 1; // set all other literals back to 0 based on the above condition
+                    for (; updateLevel < pickBlocks.size(); ++updateLevel) // for all blocks deeper in the tree, after backtracking
+                        pickedAlready[updateLevel] = 0; // the first literal has to be considered again
+                }
+            }
+
+            //#error check this here! moving forward should be ok ...
+            //       pickedAlready[pickLevel] = block.size();   // memorize that this block is satisfied with the previous decisions
+            ++pickLevel;
+            continue; // consider next block
+        }
+
+        if (opt_eldbg)
+            cerr << "c INITIAL to satisfy block: " << block << " with pick= " << pickedAlready[pickLevel] << endl;
+        // look for a literal of the current block that can be satisfied
+        for (; pickedAlready[pickLevel] < block.size(); pickedAlready[pickLevel]++) { // otherwise increase the counter of the current level
+            if (value(block[pickedAlready[pickLevel]]) != l_False) break; // found a literal that is still free
+        }
+        if (opt_eldbg)
+            cerr << "c AFTER SCAN to satisfy block: " << block << " with pick= " << pickedAlready[pickLevel] << endl;
+
+        // reached a level where we can pick a literal to satisfy the clause
+        if (pickedAlready[pickLevel] >= pickBlocks[pickLevel].size()) { // we already picked all literals of this clause, apply backtracking and set the picks for previous clauses
+            // found all combinations of the current stack?
+            if (pickLevel == 0) {
+                if (opt_eldbg) cerr << "c exceeded all combinations" << endl;
+                return lit_Error; // exceeded all combinations for the very first block, hence we are done!
+            }
+
+            // otherwise backtrack!
+            int updateLevel = pickLevel - 1;
+            while (updateLevel >= 0) { // modify pick for previous level (all necessary levels recursively)
+                pickedAlready[updateLevel]++;
+                if (pickedAlready[updateLevel] < pickBlocks[updateLevel].size())
+                    break; // do not backtrack beyond, because there is another combination that has to be considered
+                updateLevel--; // continue on previous level
+            }
+            for (; updateLevel < pickBlocks.size(); ++updateLevel) // for all blocks deeper in the tree, after backtracking
+                pickedAlready[updateLevel] = 0;                    // the first literal has to be considered again
+        }
+
+        if (opt_eldbg)
+            cerr << "c AFTER BACKTRACK to satisfy block: " << block << " with pick= " << pickedAlready[pickLevel] << endl;
+        // after backtracking, perform the same check once more
+        // look for a literal of the current block that can be satisfied
+        for (; pickedAlready[pickLevel] < block.size(); pickedAlready[pickLevel]++) { // otherwise increase the counter of the current level
+            if (value(block[pickedAlready[pickLevel]]) != l_False) break; // found a literal that is still free
+        }
+        if (opt_eldbg)
+            cerr << "c AFTER SCAN2 to satisfy block: " << block << " with pick= " << pickedAlready[pickLevel] << endl;
+
+        assert(pickedAlready[pickLevel] < block.size() && "the block can be satisfied");
+        assert(value(block[pickedAlready[pickLevel]]) == l_Undef && "there has to be a free literal in this clause");
+
+        if (opt_eldbg) { // print the path to the current model
+            cerr << "c select " << block[pickedAlready[pickLevel]] << " : picked branch in decision tree: ";
+            for (int i = 0; i <= pickLevel; ++i)
+                cerr << " " << pickBlocks[i][pickedAlready[i]] << " ( " << pickedAlready[i] << "/" << pickBlocks[i].size() << " ) ";
+            cerr << endl;
+        }
+        return block[pickedAlready[pickLevel]];
+    }
+
+    // satisfied all clauses in the stack
+    if (pickLevel >= pickedAlready.size()) {
+        if (opt_eldbg) { // print the path to the current model
+            cerr << "c created another model" << endl;
+            cerr << "c picked branch in decision tree: ";
+            for (int i = 0; i < pickLevel; ++i)
+                cerr << " " << pickBlocks[i][pickedAlready[i]] << " ( " << pickedAlready[i] << "/" << pickBlocks[i].size() << " ) ";
+            cerr << endl;
+        }
+        return lit_Undef;
+    }
+
+    assert(false && "should never reach this part of the code");
+    exit(3);
+}
 
 lbool Solver::integrateNewClause(vec<Lit> &clause, bool modelClause)
 {
@@ -1038,6 +1256,206 @@ lbool Solver::integrateNewClause(vec<Lit> &clause, bool modelClause)
     return l_True;
 }
 
+lbool Solver::generateNextModel()
+{
+    // assert( false && "only accept models that falsify a literal of at least one clause? or that falsify a literal of each clause?" );
+
+    if (opt_eldbg)
+        cerr << "c [local] generate next model (empty: " << order_heap.empty() << ") vars: " << nVars() << endl;
+    // current state is satisfiable
+    vec<Lit> clause;
+    vec<Lit> subModelClause;  // collect all literals that are currently negated
+    if (order_heap.empty()) { // formula is currently satisfied. disallow current model, and generate next model
+        if (opt_eldbg)
+            cerr << "c use first "
+                 << (generateClauseModels && artificialSatLevel != -1 ? artificialSatLevel : trail_lim.size())
+                 << " decision levels for disallow-clause" << endl;
+        for (int i = 0; i < (generateClauseModels && artificialSatLevel != -1 // if we create clause-models (tree based), then use the artificial level(if there was one)
+                             ?
+                             artificialSatLevel // use the artificial level
+                             :
+                             trail_lim.size()) // otherwise build a usual decision clause
+             ;
+             ++i) { // consider only the decision levels that are required for enumerating the tree
+            clause.push(~trail[trail_lim[i]]);
+        }
+
+        if (opt_avoidSubModel) {
+            for (Var v = 0; v < nVars(); ++v) {
+                // #error check whether decision literals are enough
+                if (value(v) == l_False)
+                    subModelClause.push(mkLit(v)); // collect all literals that are currently mapped to false. one of them has to be satisfied in the next round!
+            }
+        }
+
+        // if the solver generates models based on the specialized procedure, tell it to generate the next model
+        if (generateClauseModels) {
+            int updateLevel = pickedAlready.size() - 1;
+            if (updateLevel >= 0) { // if there are already levels, backtrack to the next interpretation for the tree
+                while (updateLevel >= 0) { // modify pick for previous level (all necessary levels recursively)
+                    pickedAlready[updateLevel]++;
+                    if (pickedAlready[updateLevel] < pickBlocks[updateLevel].size())
+                        break; // do not backtrack beyond, because there is another combination that has to be considered
+                    updateLevel--; // continue on previous level
+                }
+                for (updateLevel++; updateLevel < pickBlocks.size(); ++updateLevel) // for all blocks deeper in the tree, after backtracking
+                    pickedAlready[updateLevel] = 0; // the first literal has to be considered again
+            }
+        }
+
+        if (opt_eldbg) cerr << "c [local] generate model disallow clause " << clause << endl;
+        if (l_False == integrateNewClause(clause)) { // add the new decision clause (should backtrack)
+            return l_False;                          // tell that adding the next clause failed
+        }
+
+        if (opt_avoidSubModel) {
+            if (opt_eldbg) cerr << "c [local] generate sub model disallow clause " << subModelClause << endl;
+            if (l_False == integrateNewClause(subModelClause)) { // add the new decision clause (should backtrack)
+                return l_False;                                  // tell that adding the next clause failed
+            }
+            cancelUntil(0);
+        }
+    }
+
+    if (opt_eldbg) cerr << "c [local] ok: " << ok << " trail: " << trail << endl;
+    if (opt_eldbg)
+        cerr << "c [local] qhead: " << qhead << " |trail|: " << trail.size() << " nVars: " << nVars()
+             << " level: " << decisionLevel() << endl;
+
+    if (opt_eldbg) {
+        cerr << "c [local] formula" << endl;
+        for (int i = 0; i < clauses.size(); ++i) {
+            cerr << "c [local clause] " << ca[clauses[i]] << endl;
+        }
+        for (int i = 0; i < learnts.size(); ++i) {
+            cerr << "c [local learnt] " << ca[learnts[i]] << endl;
+        }
+    }
+
+    // search for the next model with an infinite budget
+    lbool ret = search(INT32_MAX);
+    assert(ret != l_Undef && "search without budget");
+    if (opt_eldbg) cerr << "c [local] ret == l_True: " << (ret == l_True) << " |trail|: " << trail.size() << endl;
+    // cerr << "c return answer after " << conflicts << " conflicts and " << decisions << " decisions" << endl;
+    return ret;
+}
+
+
+void Solver::removeIrrelevantClauses(vec<Lit> &assumps, const Lit questionLit, vec<Lit> *removedClauses)
+{
+    assert(decisionLevel() == 0 && "perform only before search");
+
+    if (opt_reduceLits) {
+        cerr << "c cannot reduce based on literals yet ... use fallback with variables" << endl;
+    }
+
+    // clear all watch lists
+    watches.cleanAll();
+    for (int v = 0; v < nVars(); v++)
+        for (int s = 0; s < 2; s++) watches[mkLit(v, s)].clear();
+
+    // add all clauses to all watch lists (as all watch scheme)
+    int keptClauses = 0;
+    for (int i = 0; i < clauses.size(); ++i) { // add a clause C = [a,b,c] to the watch lists a, b and c (not the complement!)
+        const Clause &c = ca[clauses[i]];
+        if (c.mark()) { // delete the ignored clause
+
+        } else {
+            for (int j = 0; j < c.size(); ++j) watches[c[j]].push(Watcher(clauses[i], c[j]));
+            clauses[keptClauses++] = clauses[i]; // keep the clause
+        }
+    }
+    clauses.shrink(clauses.size() - keptClauses); // remove ignored clauses
+
+    // use a queue that consists of a seen-vector, and a vector with a head-index
+    int seenOldSize = seen.size();
+    seen.growTo(2 * nVars(), 0); // storage for each literal
+    vec<Lit> queue;
+    int head = queue.size();
+    queue.push(questionLit);
+    seen[toInt(opt_reduceLits ? ~questionLit : mkLit(var(questionLit), false))] = 1; // do not add this literal again
+
+    // perform depth first search from clauses starting with variable questionLit, additionally mark clauses if already
+    // seen or use literals and then do not mark clauses, but take polarity into account
+
+    while (head < queue.size()) {                 // there are still elements to be processed
+        const Lit currentLiteral = queue[head++]; // dequeue next element
+
+        // analyze all clauses that contain this literal
+        for (int iteration = 0; iteration < (opt_reduceLits ? 1 : 2); iteration++) { // process both watch lists, if only variables are handled
+            const Lit next = iteration == 0 ? currentLiteral : ~currentLiteral; // if variables are processed, process both polarities!
+            for (int i = 0; i < watches[next].size(); ++i) {
+                Clause &c = ca[watches[next][i].cref];
+                if (!opt_reduceLits) { // if we consider only variables, its sufficient to check each clause once
+                    if (c.mark() != 0)
+                        continue; // skip clauses that have been seen already
+                    else
+                        c.mark(1); // otherwise, we can mark the clause for being skipped next time
+                }
+
+                for (int j = 0; j < c.size(); ++j) { // analyze all variables of the clause
+                    if (var(c[j]) == var(next))
+                        continue; // do not add the comlement literal of a given variable with the same clause
+                    const Lit cl = opt_reduceLits ? ~c[j] : mkLit(var(c[i]), false); // use the literal that has to be considered next
+                    if (!seen[toInt(cl)]) {                                          // have not seen this literal yet
+                        seen[toInt(cl)] = 1;                                         // do not add this literal again
+                        queue.push(cl);                                              // add the literal to the queue
+                    }
+                }
+            }
+        }
+    }
+
+    cerr << "c found " << queue.size() << " relevant literals in the formula out of " << nVars() << endl;
+
+    // remove all assumption literals that are not marked
+    int keptAssumptions = 0;
+    for (int i = 0; i < assumps.size(); ++i) {
+        const Lit al = opt_reduceLits ? al : mkLit(var(al), false); // the asssumption is not negated for the implication (as literals in clauses are)
+        if (seen[toInt(al)]) assumps[keptAssumptions++] = assumps[i];
+    }
+    cerr << "c removed " << assumps.size() - keptAssumptions << " assumptions out of " << assumps.size() << endl;
+    assumps.shrink(assumps.size() - keptAssumptions);
+
+    // clean watch lists after "misusing" them, and before using them properly again
+    for (int v = 0; v < nVars(); v++)
+        for (int s = 0; s < 2; s++) watches[mkLit(v, s)].clear();
+    // remove all clauses that do not contain marked variables or marked complements
+    // if necessary, add them to the vector in the parameter
+    keptClauses = 0;
+    for (int i = 0; i < clauses.size(); ++i) {
+        Clause &c = ca[clauses[i]];
+        c.mark(1); // mark the clause as redundant, and check whether it's not
+        for (int j = 0; j < c.size(); ++j) {
+            const Lit &l = c[j];
+            if (seen[toInt(l)] || seen[toInt(~l)]) { // some literal is marked (or its complement)
+                c.mark(0);
+                break;
+            }
+        }
+
+        if (c.mark() == 0) {
+            attachClause(clauses[i]);
+            clauses[keptClauses++] = clauses[i];
+        } else if (removedClauses != 0) {
+            for (int j = 0; j < c.size(); ++j) // add the clause to the list of removed clauses
+                removedClauses->push(c[j]);
+            removedClauses->push(lit_Undef); // separate the literals of clauses by a "lit_Undef" literal
+            ca.free(clauses[i]);             // tell the garbage collector that we removed the clause
+        }
+    }
+    cerr << "c removed " << clauses.size() - keptClauses << " irrelevant clauses" << endl;
+    clauses.shrink(clauses.size() - keptClauses); // remove the clauses that are not useful
+
+    // clean seen vector, independently of used option clean both
+    for (int i = 0; i < queue.size(); ++i) {
+        seen[toInt(queue[i])] = 0;
+        seen[toInt(~queue[i])] = 0;
+    }
+    seen.shrink(nVars()); // reduce half of the variables again
+    assert(seen.size() == nVars() && "have the same space as before");
+}
+
 
 bool Solver::minimizeCurrentConflict(const Lit questionLit)
 {
@@ -1097,6 +1515,297 @@ bool Solver::minimizeCurrentConflict(const Lit questionLit)
     assumptionBackup.moveTo(assumptions);                                 // restore previous assumptions vector
 
     return conflict.size() < oldConflictSize; // return whether the conflict has been minimized
+}
+
+lbool Solver::findImplications(vec<Lit> &assumps, Lit questionLit, int rotate)
+{
+    // TODO: use global variables and timers for statistics
+    int checks = 0, localchecks = 0, unsatchecks = 0;
+    uint64_t savedLevels = 0;
+
+    double findTime = cpuTime();
+
+    assumps.copyTo(assumptions);
+
+    // reduce the formual and set of assumptions
+    vec<Lit> removdClauses; // storage for all clauses that have been removed due to being irrelevant
+    if (opt_reduce > 0) {   // reduce the formula (delete clauses that are irrelevant)
+        removeIrrelevantClauses(assumptions, questionLit, (opt_reduce > 1 ? &removdClauses : 0));
+    }
+
+    // have a first call with the full set (check for any subset)
+    assumptions.push(questionLit);
+    // if( opt_eldbg ) cerr << "c solve with assumptions " << assumptions << endl;
+
+    SATSolver *externalSolver = 0;
+#ifdef HAVE_IPASIR
+    if (opt_optext) {
+        externalSolver = new SATSolver(); // use this, if IPASIR should be used
+        assert(decisionLevel() == 0 && "no search should have happened so far");
+        vec<Lit> c;
+        for (int i = 0; i < trail.size(); ++i) {
+            c.clear();
+            c.push(trail[i]);
+            externalSolver->addClause(c);
+        }
+        for (int i = 0; i < clauses.size(); ++i) {
+            c.clear();
+            const Clause &cl = ca[clauses[i]];
+            c.growTo(cl.size());
+            for (int j = 0; j < cl.size(); ++j) {
+                c[j] = cl[j];
+            }
+            if (opt_sort) sort(c); // try to make run repeatable
+            externalSolver->addClause(c);
+        }
+    }
+#endif
+
+    lbool ret;
+
+    if (opt_eldbg) cerr << "test assumptions: " << assumptions << std::endl;
+    if (externalSolver) {
+#ifdef HAVE_IPASIR
+        if (opt_sort) {
+            assumptions.copyTo(sortedAssumptions);
+            sort(assumptions);
+        }
+#endif
+        int ipasirRet = externalSolver->solve(assumptions, model, conflict);
+        ret = ipasirRet == 10 ? l_True : l_False;
+        if (opt_eldbg) std::cerr << "ipasirRet: " << ipasirRet << std::endl;
+#ifdef HAVE_IPASIR
+        if (opt_sort) {
+            //       std::cerr << "sort conflict, unsort assumptions" << std::endl;
+            sortedAssumptions.copyTo(assumptions);
+            sort(conflict);
+        }
+#endif
+    } else
+        ret = solveLimited_();
+
+    assumptions.shrink_(1);
+    checks++;
+
+    // there is no conflicting subset of assumptions that violates the questionLit
+    if (ret == l_True) {
+        std::cerr << "no conflicting subset" << std::endl;
+        return l_True;
+    }
+    assert(ret != l_Undef && "the solution should not be aborted due to some other reason");
+
+    int oldVerbosity = verbosity;
+    verbosity = 0; // disable statistics output
+
+    Solver *localSolver = new Solver();            // generate solver that maintains the formula G
+    if (opt_eldbg) localSolver->localDebug = true; // enable debug for local solver
+
+    if (opt_modelClause) // tell the local solver to enumerate models according to a specialized scheme
+        localSolver->generateClauseModels = true;
+
+    vec<int> assumpsPositions;
+    assumpsPositions.growTo(nVars(), 0); // have a mapping for each variable (even though not all variables might be present
+    int originalAssumptions = assumptions.size(); // store number of initial assumption literals
+    vec<Lit> violatingAssumptions;                // set of literals that already appeared in conflicts
+    vec<Var> varToLocalVar; // map from outer variables to inner variables (so that the inner solver has only as many variables as required)
+    varToLocalVar.growTo(nVars(), var_Undef); // indicate the variable in the inner solver, have a mapping for each variable of the formula
+
+    // have a vector with the positions of the literals in assumptions, store the positions
+    for (int i = 0; i < assumptions.size(); ++i) {
+        assumpsPositions[var(assumptions[i])] = i; // variable assumptions[i] is at position i
+    }
+
+    int foundAnswers = 0;
+    vec<char> assumptionInViolatingSet;
+    assumptionInViolatingSet.growTo(nVars(), 0);
+    int usedAssumptions = 0;
+
+    // enumerate all interesting solutions
+    do {
+
+        if (ret == l_False) { // display violating set, remove quesiton literal from conflict, rewrite conflict clause, add conflict to localsolver
+            unsatchecks++;
+
+            if (!externalSolver) {
+                if (opt_minimalOnly) {
+                    if (opt_eldbg) cerr << "c minimize conflicting clause: " << conflict << endl;
+                    minimizeCurrentConflict(questionLit);
+                }
+            }
+
+            // check number of
+            for (int i = 0; i < conflict.size(); ++i) {
+                if (conflict[i] != ~questionLit) { // remove the question literal from the conflict, do not display the literal
+                    if (assumptionInViolatingSet[var(conflict[i])] == 0) {
+                        ++usedAssumptions;
+                        assumptionInViolatingSet[var(conflict[i])] = 1;
+                    }
+                }
+            }
+
+            if (opt_eldbg) cerr << "c actual conflicting clause: " << conflict << endl;
+            foundAnswers++;
+            if (foundAnswers == 1)
+                printf("              [#,CPUsec,MB,totallyUsedAssumptions,totalCalls]: variables in the sat\n");
+            printf("violating set [%d,%.3lf,%.2f,%lf,%d]: ", foundAnswers, cpuTime() - findTime, memUsedPeak(),
+                   (double)usedAssumptions / (double)assumptions.size(), localchecks);
+            for (int i = 0; i < conflict.size(); ++i) {
+                if (conflict[i] == ~questionLit) { // remove the question literal from the conflict, do not display the literal
+                    conflict[i] = conflict[conflict.size() - 1]; // move last literal forward
+                    conflict.shrink(1);
+                    --i;
+                    continue;
+                }
+                printf("%s%d ", sign(conflict[i]) ? "" : "-", var(conflict[i]) + 1); // print complement of the next literal
+            }
+            printf("0\n");
+
+            // remove conflicting variables from assumption vector
+            for (int i = 0; i < conflict.size(); ++i) {
+                if (opt_eldbg) cerr << "c process " << i << "/" << conflict.size() << endl;
+                const Var v = var(conflict[i]);
+                int minLevel = decisionLevel();          // get minimal literal to calculate the backtracking point
+                if (assumpsPositions[v] != -1) {         // variable has not been moved to conflicting sets before
+                    const int pos = assumpsPositions[v]; // use temporary position variable
+                    minLevel = minLevel <= level(v) ? minLevel : level(v);  // store minimum level
+                    assumptions[pos] = assumptions[assumptions.size() - 1]; // move other variable forward
+                    assumpsPositions[var(assumptions[pos])] = pos;          // update position of the moved literal
+                    assumpsPositions[v] = -1; // invalidate variable v, actually removing it from the structure
+                    violatingAssumptions.push(~conflict[i]); // add literal to the other set
+                    assumptions.shrink(1);                   // remove the last literal, which has been moved forwards
+                }
+
+                if (!externalSolver) {
+                    if (opt_keepSearch && minLevel > 0) {
+                        cancelUntil(minLevel - 1); // remove the level of the smallest assumption
+                    }
+                }
+
+                // rewrite the conflict clause with respect to the variable map
+                if (varToLocalVar[v] == var_Undef) {
+                    if (opt_eldbg) cerr << "c variable without mapping " << v + 1 << endl;
+                    varToLocalVar[v] = localSolver->newVar(); // assign the new variable
+                    if (opt_eldbg)
+                        cerr << "c variable without mapping " << v + 1 << " maps to " << varToLocalVar[v] + 1 << endl;
+                    // 	  cerr << "c add " << varToLocalVar[v] + 1 << " to the heap" << endl;
+                    //  localSolver->order_heap.insert( varToLocalVar[v] );  // and tell the local solver that there is another new variable for being decided
+                }
+                if (opt_eldbg)
+                    cerr << "c rewrite " << conflict[i] << " into " << mkLit(varToLocalVar[v], sign(conflict[i])) << endl;
+                conflict[i] = mkLit(varToLocalVar[v], sign(conflict[i])); // store the according variable
+            }
+            if (opt_eldbg)
+                cerr << "c original: " << originalAssumptions << " current: " << assumptions.size()
+                     << " localVars: " << localSolver->nVars() << endl;
+            if (opt_eldbg) cerr << "c rewritten conflict clause: " << conflict << endl;
+            assert(originalAssumptions == assumptions.size() + localSolver->nVars() &&
+                   "variables should not disappear or be created");
+
+            // add the rewriten clause
+            if (l_False == localSolver->integrateNewClause(conflict, opt_modelClause)) // tell the local solver to forget about the current violating set -- use this set of literals for model enumeration
+                break; // in case of failure, there are no more models to be generated by that solver
+        }
+
+        // get next local model
+        ret = localSolver->generateNextModel();
+        localchecks++;
+        if (ret == l_False)
+            break; // there is no more model in the local solver, so we generated all possible models for the variables that are known to the local solver
+
+        // add extra assumptions to solver // TODO can be done faster if the solver does not backtrack to level 0 in the solve_ method!
+        const int preCallAssumptoinSize = assumptions.size();
+        if (!externalSolver) {
+            if (opt_keepSearch && assumptions.size() > 0) { // jump back as far as necessary
+                cancelUntil(level(var(assumptions[assumptions.size() - 1])));
+            }
+        }
+
+
+        // add the assumptions that vary (due to model generation) // TODO: improvement would be to order the actual assumption vector to maximize the backjump level (to not backjump too far)
+        int minAssumptionLevel = decisionLevel();
+        for (int i = 0; i < violatingAssumptions.size(); ++i) {
+            const Lit outerLit = violatingAssumptions[i];
+            const Lit localLit = mkLit(varToLocalVar[var(outerLit)], sign(outerLit)); // translate to local variable names
+            assumptions.push((localSolver->value(localLit) == l_True) ? outerLit : ~outerLit); // add literal according to sign in local solver
+            if (value(outerLit) != l_Undef)
+                minAssumptionLevel = minAssumptionLevel < level(var(outerLit)) ? minAssumptionLevel : level(var(outerLit)); // select level to backjump to
+        }
+
+        if (!externalSolver) {
+            if (opt_keepSearch)
+                cancelUntil(minAssumptionLevel > 1 ? minAssumptionLevel - 1 : 0);
+            else
+                assert(decisionLevel() == 0 && "if no time-saving is used, decision level has to be 0");
+            savedLevels += (uint64_t)decisionLevel();
+        }
+
+        assumptions.push(questionLit); // add questionlit again
+        assert(value(questionLit) == l_Undef && "question literal should not have a truth value already");
+        /*
+        cerr << "c solve with assumptions " << assumptions << endl;
+        cerr << "c solve with trail       " << assumptions << endl;*/
+
+        // cerr << "test assumptions: " << assumptions << std::endl;
+        // use the assumptions implicitely
+        if (!externalSolver)
+            ret = solveLimited_(); // analyze the current set of assumptions // TODO: can be done faster if backtracking for restarts takes the assumptions into account
+        else {
+#ifdef HAVE_IPASIR
+            if (opt_sort) {
+                assumptions.copyTo(sortedAssumptions);
+                sort(assumptions);
+            }
+#endif
+            ret = externalSolver->solve(assumptions, model, conflict) == 10 ? l_True : l_False;
+#ifdef HAVE_IPASIR
+            if (opt_sort) {
+                //         std::cerr << "sort conflict, unsort assumptions" << std::endl;
+                sortedAssumptions.copyTo(assumptions);
+                sort(conflict);
+            }
+#endif
+        }
+        // cerr << "search returned conflict: " << conflict << endl;
+
+        //     checks ++;                                                // stats
+        assumptions.shrink(assumptions.size() - preCallAssumptoinSize); // remove the extra variables again
+        if (checks > opt_max_calls) {
+            cerr << "Warning: interupt due to too many calls" << endl;
+            break;
+        }
+
+    } while (true && !asynch_interrupt);
+
+    printf("local fast forward: sat: %d unsat: %d \n", localSolver->satTreeFastForward, localSolver->unsatTreeFastForward);
+    delete localSolver;
+
+    printf("found violating sets: %d\n", foundAnswers);
+    printf("outer calls: %d (unsat: %d), inner calls: %d\n", checks, unsatchecks, localchecks);
+    printf("saved levels: %lld\n", savedLevels);
+    printf("minimization calls: %d, successful: %d, backjumps: %d\n", minimalChecks, minimizations, minimizationBackjump);
+
+    verbosity = oldVerbosity;
+
+    cancelUntil(0); // make sure we clean up the solver!
+    assert(decisionLevel() == 0 &&
+           "after processing all literals, decision level should be set to 0 before returning to caller");
+    // add the missing clauses back
+    if (removdClauses.size() != 0) {
+        vec<Lit> clause;
+        int readdedClauses = 0;
+        for (int i = 0; i < removdClauses.size(); ++i) {
+            if (removdClauses[i] != lit_Undef)
+                clause.push(removdClauses[i]);
+            else {
+                addClause_(clause);
+                clause.clear();
+                readdedClauses++;
+            }
+        }
+        cerr << "c added " << readdedClauses << " back" << endl;
+    }
+
+    return l_False;
 }
 
 void Solver::toGroupMUS(const char *file, const vec<Lit> &assumps, const Lit questionLit)
@@ -1197,7 +1906,9 @@ lbool Solver::solve_()
     } else if (status == l_False && conflict.size() == 0)
         ok = false;
 
-    cancelUntil(0);
+    if (!opt_keepSearch) // jump only back, if we do not use the imply check
+        cancelUntil(0);
+
     return status;
 }
 
