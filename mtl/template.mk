@@ -24,8 +24,17 @@ LFLAGS    ?= -Wall
 
 COPTIMIZE ?= -O3
 
+# compile with make <target> LIBSOLVER="<location-to-ipasir-lib> [<ld-dependencies>]" to compile with ipasir
+# LIBSOLVER ?= ~/riss/build/lib/libriss-coprocessor.a -pthread
+
+# In case we should linke against ipasir solvers, teach the source to do so
+# Note, this might require cleaning the build artifacts
+ifneq ($(LIBSOLVER),)
+CFLAGS    += -D HAVE_IPASIR
+endif
+
 CFLAGS    += -I$(MROOT) -D __STDC_LIMIT_MACROS -D __STDC_FORMAT_MACROS
-LFLAGS    += -lz
+LFLAGS    += -lz $(LIBSOLVER)
 
 .PHONY : s p d r rs clean 
 
