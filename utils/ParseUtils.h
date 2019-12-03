@@ -102,7 +102,8 @@ template <class B> static int parseInt(B &in)
         neg = true, ++in;
     else if (*in == '+')
         ++in;
-    if (*in < '0' || *in > '9') fprintf(stderr, "PARSE ERROR! Unexpected char: %c\n", *in), exit(3);
+    assert(*in >= '0' && *in <= '9' && "expect numbers");
+    if (*in < '0' || *in > '9') fprintf(stderr, "PARSE ERROR! Unexpected char: %c (%d)\n", *in, (int)*in), exit(3);
     while (*in >= '0' && *in <= '9') val = val * 10 + (*in - '0'), ++in;
     return neg ? -val : val;
 }
