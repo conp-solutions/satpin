@@ -505,6 +505,8 @@ void Solver::uncheckedEnqueue(Lit p, CRef from)
     assert(value(p) == l_Undef);
     assigns[var(p)] = lbool(!sign(p));
     vardata[var(p)] = mkVarData(from, decisionLevel());
+    // prefetch watch lists
+    __builtin_prefetch(&watches[p], 1, 0); // prefetch the watch, prepare for a write (1), the data is highly temoral (0) // FIXME: after ternary clause modificatoin, write is no longer necessary
     trail.push_(p);
 }
 
