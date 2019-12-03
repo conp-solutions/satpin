@@ -477,6 +477,7 @@ inline lbool Solver::solveLimited(const vec<Lit> &assumps)
     assumps.copyTo(assumptions);
     return solve_();
 }
+inline lbool Solver::solveLimited_() { return solve_(); }
 inline bool Solver::okay() const { return ok; }
 
 inline void Solver::toDimacs(const char *file)
