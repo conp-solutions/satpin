@@ -508,6 +508,8 @@ void Solver::uncheckedEnqueue(Lit p, CRef from)
     // prefetch watch lists
     __builtin_prefetch(&watches[p], 1, 0); // prefetch the watch, prepare for a write (1), the data is highly temoral (0) // FIXME: after ternary clause modificatoin, write is no longer necessary
     trail.push_(p);
+    assert((from == CRef_Undef || ca[from].size() == 1 || level(var(ca[from][0])) == level(var(ca[from][1]))) &&
+           "ensure reason properties");
 }
 
 
