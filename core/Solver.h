@@ -296,6 +296,13 @@ class Solver
 
     vec<char> necessary;       // remember which variables are necessary (for conflict minimization)
     vec<Lit> assumptionBackup; // backup current assumption vector(for conflict minimization)
+
+    /** integrate the given clause into the current state of the SAT solver
+     *  @param clause vector with the literals of the clause
+     *  @param modelClause use this clause for enumerating models, if the used mode is the enumeration mode
+     *  @return l_False, if adding the clause turns the formula of the solver unsatisfiable, l_True, if addig the clause did not fail
+     */
+    lbool integrateNewClause(vec<Lit> &clause, bool modelClause = false);
 };
 
 

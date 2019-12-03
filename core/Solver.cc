@@ -830,6 +830,213 @@ static double luby(double y, int x)
     return pow(y, seq);
 }
 
+
+lbool Solver::integrateNewClause(vec<Lit> &clause, bool modelClause)
+{
+    if (opt_eldbg) cerr << "c [local] add clause " << clause << " at level " << decisionLevel() << endl;
+    if (opt_eldbg) cerr << "c [local] ok: " << ok << " trail: " << trail << endl;
+
+    if (clause.size() == 0) {
+        ok = false;     // solver state is false
+        return l_False; // adding the empty clause results in an unsatisfiable formula
+    }
+
+    // make sure we have enough variables
+    Lit maxLit = clause[0];
+    for (int i = 0; i < clause.size(); ++i) {
+        maxLit = clause[i] < maxLit ? maxLit : clause[i];
+    }
+    while (nVars() < var(maxLit)) {
+        const Var nv = newVar();
+        //    cerr << "c [local] add " << nv + 1 << " to heap" << endl;
+    }
+
+    // analyze the current clause
+    int satLits = 0, unsatLits = 0, undefLits = 0;
+
+    for (int i = 0; i < clause.size(); ++i) {
+        lbool truthvalue = value(clause[i]);
+        if (truthvalue != l_False) {
+            Lit tmp = clause[undefLits + satLits];
+            clause[undefLits + satLits] = clause[i];
+            clause[i] = tmp;
+            undefLits = (truthvalue == l_Undef) ? undefLits + 1 : undefLits;
+            satLits = (truthvalue == l_True) ? satLits + 1 : satLits;
+        } else
+            unsatLits++;
+    }
+
+    if (opt_eldbg)
+        cerr << "c [local] sat: " << satLits << " unsat: " << unsatLits << " undefLits: " << undefLits << endl;
+
+    // clause is not satisfied, and not "free" enough
+    int backtrack_level = decisionLevel();
+    int highestLevelVars = 0;
+    if (undefLits + satLits < 2) {
+        if (undefLits + satLits < 1) { // apply backtracking
+
+            if (opt_eldbg) {
+                cerr << "c [local] detailed2: ";
+                for (int i = 0; i < clause.size(); ++i)
+                    cerr << " " << clause[i] << "@" << level(var(clause[i])) << "t" << (value(clause[i]) == l_True)
+                         << "f" << (value(clause[i]) == l_False);
+                cerr << " " << endl;
+            }
+            int higehest_level = 0;
+            backtrack_level = -1;
+            for (int i = 0; i < clause.size(); ++i) {
+                assert(value(clause[i]) == l_False && "all literals in the clause have to be unsatisfiable");
+                assert(higehest_level > backtrack_level && "some literals have to be undefined after backtracking");
+                if (level(var(clause[i])) > higehest_level) { // found new highest level in the clause
+                    if (opt_eldbg)
+                        cerr << "c " << clause[i] << " sets bt to " << backtrack_level << " and highest to "
+                             << level(var(clause[i])) << endl;
+                    backtrack_level = higehest_level;       // the other level is the new backtrack level
+                    higehest_level = level(var(clause[i])); // store new highest level
+                    Lit tmp = clause[0];
+                    clause[0] = clause[i];
+                    clause[i] = tmp;      // move highest level variable to front!
+                    highestLevelVars = 1; // count variables for this level
+                } else if (level(var(clause[i])) > backtrack_level) {
+                    if (level(var(clause[i])) == higehest_level) { // found another variable of the highest level
+                        if (opt_eldbg)
+                            cerr << "c move literal " << clause[i] << "@" << level(var(clause[i])) << " to position "
+                                 << highestLevelVars << endl;
+                        Lit tmp = clause[highestLevelVars];
+                        clause[highestLevelVars] = clause[i];
+                        clause[i] = tmp;    // move highest level variable to front!
+                        highestLevelVars++; // and count
+                    } else {
+                        if (opt_eldbg)
+                            cerr << "c " << clause[i] << " updates bt from " << backtrack_level << " to "
+                                 << level(var(clause[i])) << " highest: " << higehest_level << endl;
+                        backtrack_level = level(var(clause[i]));
+                    }
+                }
+            }
+            for (int i = 1; i < clause.size(); ++i) { // move literal of backtrack level forward
+                if (level(var(clause[i])) == backtrack_level) {
+                    const Lit tmp = clause[i];
+                    clause[i] = clause[1];
+                    clause[1] = tmp; // move the literal forward
+                    break;           // stop looking for more variables
+                }
+            }
+        } else {
+            assert(value(clause[0]) != l_False && "shuffling above moved only free literal to front");
+            backtrack_level = 0;
+            for (int i = 1; i < clause.size(); ++i) { // find actual backtrack level
+                if (level(var(clause[i])) > backtrack_level) {
+                    backtrack_level = level(var(clause[i])); // store level
+                    Lit tmp = clause[1];
+                    clause[1] = clause[i];
+                    clause[i] = tmp; // move literal to front
+                }
+                assert(level(var(clause[1])) >= level(var(clause[i])) && "highest level on second position in clause");
+            }
+        }
+    }
+
+    // jump back (if necessary)
+    if (backtrack_level == -1) { // cannot backtrack beyond level 0 -> clause cannot be added to the formula
+        assert(value(clause[0]) == l_False && "clause is falsified");
+        ok = false;
+        return l_False;
+    }
+
+    if (opt_eldbg)
+        cerr << "c [local] decisionLevel: " << decisionLevel() << " backtracklevel: " << backtrack_level << endl;
+
+    cancelUntil(backtrack_level); // backtrack
+
+    if (opt_eldbg) {
+        cerr << "c [local] detailed2: ";
+        for (int i = 0; i < clause.size(); ++i)
+            cerr << " " << clause[i] << "@" << level(var(clause[i])) << "t" << (value(clause[i]) == l_True) << "f"
+                 << (value(clause[i]) == l_False);
+        cerr << " " << endl;
+    }
+
+    assert(value(clause[0]) != l_False && "first literal has to be free now");
+
+    // add the clause to the local data structures
+    CRef cr = CRef_Undef;    // for unit clauses
+    if (clause.size() > 1) { // if clause is larger, add nicely to two-watched-literal structures
+        cr = ca.alloc(clause, false);
+        clauses.push(cr);
+        attachClause(cr);
+
+        if (opt_eldbg) cerr << "c new reason clause[ " << cr << " ]: " << ca[cr] << endl;
+
+        if (modelClause) { // use this clause for model enumeration
+            if (opt_eldbg) cerr << "c add a new model clause to the solver" << endl;
+            pickedAlready.push(0); // did not see any of the literals of the current clause yet
+            pickBlocks.push_back(vector<Lit>());
+            pickBlocks[pickBlocks.size() - 1].resize(clause.size());
+            for (int i = 0; i < clause.size(); ++i)
+                pickBlocks[pickBlocks.size() - 1][i] =
+                clause[i]; // satisfy one literal of the clause during specialized decision heuristic
+            if (opt_subsumeBlocks)
+                sort(pickBlocks[pickBlocks.size() - 1]); // sort the block, so that it becomes easier later to replace a block with a smaller one
+            if (opt_eldbg)
+                cerr << "c new decision block: (" << pickBlocks[pickBlocks.size() - 1].size() << ") "
+                     << pickBlocks[pickBlocks.size() - 1] << endl;
+
+            // check whether duplicate solutions have been found already
+            if (opt_subsumeBlocks) {
+                sort(pickBlocks[pickBlocks.size() - 1]); // sort the block, so that it becomes easier later to replace a block with a smaller one
+                // check all blocks for being subsumed, replace the first subsumed block with the current block, delete all other subsumed blocks from the list
+                int keptBlocks = 0;
+                vector<Lit> &block = pickBlocks[pickBlocks.size() - 1]; // reference to current block
+                bool isFirstSubsumed = true;                            // it did not yet subsume any block
+                for (int i = 0; i < pickedAlready.size(); ++i) {        // check all other blocks
+                    bool isSubsumed = false;
+                    if (pickBlocks[i].size() > block.size()) { // is subsumed only, if its size is larger (never find the same block with the same size)
+
+// TODO: check whether the small block subsumes the large block -- with merge routine
+#warning TO BE IMPLEMENTED
+                    }
+                    if (isSubsumed) { // if the new block subsumes another block, hande the other block
+                        if (isFirstSubsumed) {
+                            // TODO replace the current block,
+                            // update the picked-already structure
+                            isFirstSubsumed = false;
+                        }
+                        // otherwise, simply drop this block ...
+                    } else { // keep this block!
+                        pickedAlready[keptBlocks] = pickedAlready[i];
+                        pickBlocks[keptBlocks] = pickBlocks[i];
+                        keptBlocks++;
+                    }
+                }
+                pickedAlready.shrink(pickedAlready.size() - keptBlocks);
+                pickBlocks.resize(keptBlocks);
+            }
+        }
+
+    } else {
+        assert(decisionLevel() == 0 && "unit can only be added at decision level 0");
+    }
+
+    if ((undefLits == 1 && satLits == 0)                             // clause was unit before backjumping already
+        || (undefLits == 0 && satLits == 0 && highestLevelVars == 1) // or clause became unit after backjumping
+    ) {
+        if (opt_eldbg) cerr << "c [local] enqueue unit " << clause[0] << endl;
+        assert((clause.size() == 1 || cr != CRef_Undef) && "always enqueue with a reason");
+        uncheckedEnqueue(clause[0], cr); // then continue with unit propagation
+        assert((clause.size() <= 1 || level(var(clause[0])) == level(var(clause[1]))) &&
+               "always watch two literals of the same level (conflicting)");
+    } else {
+        if (clause.size() == 1)
+            cerr << "c did not enqueue unit clause " << clause << " at level " << decisionLevel()
+                 << " satisfied: " << (value(clause[0]) == l_True) << " falsified: " << (value(clause[0]) == l_False) << endl;
+    }
+
+    if (opt_eldbg) cerr << "c [local] succeeded at level " << decisionLevel() << endl;
+    if (opt_eldbg) cerr << "c [local] trail " << trail << endl;
+
+    return l_True;
+}
 // NOTE: assumptions passed in member-variable 'assumptions'.
 lbool Solver::solve_()
 {
