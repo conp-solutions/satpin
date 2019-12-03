@@ -19,11 +19,16 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 **************************************************************************************************/
 
 #include <math.h>
+#include <string>
 
 #include "core/Solver.h"
 #include "mtl/Sort.h"
 
 using namespace Minisat;
+
+#include "utils/System.h" // for the cputime
+#include <sstream>
+using namespace std; // debug output
 
 //=================================================================================================
 // Options:
@@ -55,6 +60,26 @@ static DoubleOption opt_garbage_frac(_cat,
                                      0.20,
                                      DoubleRange(0, false, HUGE_VAL, false));
 
+/* Norbert
+ * Add option to modify the default assumption behavior of the solver
+ */
+static BoolOption opt_imply_check("EL", "implyCheck", "Question last assumption only", true);
+static IntOption opt_max_calls("EL", "maxCalls", "maximum calls to outer solver", INT32_MAX, IntRange(1, INT32_MAX));
+static BoolOption opt_eldbg("EL", "eldbg", "Enable all the EL debug output", false);
+
+static IntOption opt_reduce("EL", "reduce", "delete irrelevant clauses/assumptions (2=re-add)", 0, IntRange(0, 2));
+static BoolOption opt_reduceLits("EL", "reduceLits", "Calculate Cone Of Influcenece based on literals", false);
+
+#ifdef HAVE_IPASIR
+static BoolOption opt_optext("EL", "ipasir", "Enable ipasir solver instead of local one", false);
+static BoolOption opt_sort("EL", "elsort", "Sort MinAs and assumptions before giving to solver (for IPASIR only)", false);
+#endif
+
+static BoolOption opt_modelClause("EL", "modelClauses", "generate models based on seen conflict clauses", true);
+static BoolOption opt_keepSearch("EL", "keepSearch", "jump back only as far as necessary in outer call", false);
+static BoolOption opt_avoidSubModel("EL", "noSubModel", "enforce that from a model a sub model is never tested", true);
+static BoolOption opt_subsumeBlocks("EL", "irredModCls", "ensure that model clauses do not subsume each other", false);
+static BoolOption opt_minimalOnly("EL", "minimal", "minimize conflicting sets eagerly", false);
 
 //=================================================================================================
 // Constructor/Destructor:
@@ -119,6 +144,21 @@ Solver::Solver()
   , conflict_budget(-1)
   , propagation_budget(-1)
   , asynch_interrupt(false)
+
+  /* Norbert
+   * Have the option as solver attribute
+   */
+  , imply_check(opt_imply_check)
+  , generateClauseModels(false) // usually, use the simple search of the tool
+  , localDebug(false)
+  , satTreeFastForward(0)
+  , unsatTreeFastForward(0)
+  , artificialSatLevel(-1)
+
+  , minimalChecks(0)
+  , minimizations(0)
+  , minimizationBackjump(0)
+
 {
 }
 

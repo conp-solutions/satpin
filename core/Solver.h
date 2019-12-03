@@ -28,6 +28,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "utils/Options.h"
 
 #include <iostream>
+#include <vector>
 
 namespace Minisat
 {
@@ -109,9 +110,10 @@ class Solver
 
     // Extra results: (read-only member variable)
     //
-    vec<lbool> model;  // If problem is satisfiable, this vector contains the model (if any).
-    vec<Lit> conflict; // If problem is unsatisfiable (possibly under assumptions),
-                       // this vector represent the final conflict clause expressed in the assumptions.
+    vec<lbool> model;        // If problem is satisfiable, this vector contains the model (if any).
+    vec<Lit> conflict;       // If problem is unsatisfiable (possibly under assumptions),
+                             // this vector represent the final conflict clause expressed in the assumptions.
+    vec<Lit> sortedConflict; // sorted version of conflict
 
     // Mode of operation:
     //
@@ -192,6 +194,7 @@ class Solver
     int simpDB_assigns;   // Number of top-level assignments since last execution of 'simplify()'.
     int64_t simpDB_props; // Remaining number of propagations that must be made before next execution of 'simplify()'.
     vec<Lit> assumptions; // Current set of assumptions provided to solve by the user.
+    vec<Lit> sortedAssumptions;  // Sorted version of Assumptions
     Heap<VarOrderLt> order_heap; // A priority queue of variables ordered with respect to the variable activity.
     double progress_estimate;    // Set by 'search()'.
     bool remove_satisfied; // Indicates whether possibly inefficient linear scan for satisfied clauses should be performed in 'simplify'.
@@ -275,6 +278,24 @@ class Solver
 
     // Returns a random integer 0 <= x < size. Seed must never be 0.
     static inline int irand(double &seed, int size) { return (int)(drand(seed) * size); }
+
+    /*  Norbert
+     *  have assumption modification option as object attribute
+     */
+    bool imply_check; // have the extra check for assumptions
+    // build all models based on specialized clauses
+    bool generateClauseModels;                 // use a different pickBranchLit method
+    vec<int> pickedAlready;                    // memorize which literals have been used already as decision variable
+    std::vector<std::vector<Lit> > pickBlocks; // blocks to pick decision literals from
+    bool localDebug;                           // tell the solver from the outside that certain things should be printed
+    int satTreeFastForward, unsatTreeFastForward; // how to fast forward
+    int artificialSatLevel; // level that satisfies the formula, based on the generateClauseModels model enumeration
+    int minimalChecks, minimizations; // statistics for conflict minimization
+    int64_t minimizationBackjump;     // distance jumped back due to minimization checks
+#warning SHOULD BE REMOVED AGAIN
+
+    vec<char> necessary;       // remember which variables are necessary (for conflict minimization)
+    vec<Lit> assumptionBackup; // backup current assumption vector(for conflict minimization)
 };
 
 
