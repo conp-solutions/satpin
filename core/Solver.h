@@ -303,6 +303,14 @@ class Solver
      *  @return l_False, if adding the clause turns the formula of the solver unsatisfiable, l_True, if addig the clause did not fail
      */
     lbool integrateNewClause(vec<Lit> &clause, bool modelClause = false);
+
+    public:
+    /** convert enumeration of all implications into an all-group-MUS problem
+     *
+     *  group 0 is the formula, and the question literal, that should be implied
+     *  for each literal in the assumption vector a new group with a single unit clause is created
+     */
+    void toGroupMUS(const char *file, const vec<Lit> &assumps, const Lit questionLit);
 };
 
 

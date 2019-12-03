@@ -1037,6 +1037,65 @@ lbool Solver::integrateNewClause(vec<Lit> &clause, bool modelClause)
 
     return l_True;
 }
+
+void Solver::toGroupMUS(const char *file, const vec<Lit> &assumps, const Lit questionLit)
+{
+    int gcnfvariables = nVars();
+    int gcnfclauses = 0;
+    assert(decisionLevel() == 0 && "print formula only on level 0");
+    gcnfclauses += trail.size() + 1;         // all unit clauses, and the unit clause for the question literal
+    for (int i = 0; i < clauses.size(); ++i) // count all active clauses
+        gcnfclauses = ca[clauses[i]].mark() == 0 ? gcnfclauses + 1 : gcnfclauses;
+
+    gcnfclauses += assumps.size(); // add all the unit clauses for all the groups
+
+    // print the actual file
+    FILE *fd = fopen(file, "wr");
+    if (fd == NULL) fprintf(stderr, "could not open file %s\n", file), exit(1);
+
+    if (!ok) { // unsat
+        fprintf(fd, "p gcnf 0 1 0\n0\n");
+        fprintf(fd, "0\n"); // print the empty clause!
+        return;
+    }
+
+    // print header
+    fprintf(fd, "p gcnf %i %i %i\n", gcnfvariables, gcnfclauses, assumps.size());
+
+    // print question lit
+    {
+        stringstream s;
+        s << "{0} " << questionLit << " 0" << endl;
+        fprintf(fd, "%s", s.str().c_str());
+    }
+
+    // print trail
+    for (int i = 0; i < trail.size(); ++i) {
+        stringstream s;
+        s << "{0} " << trail[i] << " 0" << endl;
+        fprintf(fd, "%s", s.str().c_str());
+    }
+    // print clauses for group 0
+    for (int i = 0; i < clauses.size(); ++i) {
+        Clause &c = ca[clauses[i]];
+        if (c.mark()) continue;
+        stringstream s;
+        s << "{0} ";
+        for (int i = 0; i < c.size(); ++i) s << c[i] << " ";
+        s << "0" << endl;
+        fprintf(fd, "%s", s.str().c_str());
+    }
+
+    // print all the other groups
+    for (int i = 0; i < assumps.size(); ++i) {
+        stringstream s;
+        s << "{" << 1 + i << "} " << assumps[i] << " 0" << endl;
+        fprintf(fd, "%s", s.str().c_str());
+    }
+
+    fclose(fd);
+}
+
 // NOTE: assumptions passed in member-variable 'assumptions'.
 lbool Solver::solve_()
 {
