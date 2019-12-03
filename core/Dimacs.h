@@ -63,7 +63,7 @@ template <class B, class Solver> static void parse_DIMACS_main(B &in, Solver &S)
                 // if (clauses > 4000000)
                 //     S.eliminate(true);
             } else {
-                printf("PARSE ERROR! Unexpected char: %c\n", *in), exit(3);
+                printf("PARSE ERROR! Unexpected char: %c (%d, after clause %d)\n", *in, (int)*in, cnt), exit(3);
             }
         } else if (*in == 'c' || *in == 'p')
             skipLine(in);
@@ -86,6 +86,32 @@ template <class Solver> static void parse_DIMACS(gzFile input_stream, Solver &S)
 }
 
 //=================================================================================================
+
+
+/*   Norbert:
+ *   parse a single clause from a file
+ */
+template <class B> static void readClause(B &in, vec<Lit> &lits)
+{
+    int parsed_lit, var;
+    lits.clear();
+    for (;;) {
+        parsed_lit = parseInt(in);
+        if (parsed_lit == 0) break;
+        var = abs(parsed_lit) - 1;
+        lits.push((parsed_lit > 0) ? mkLit(var) : ~mkLit(var));
+    }
+}
+
+/*   Norbert:
+ *   parse a single clause from a file
+ */
+static void parse_clause(gzFile input_stream, vec<Lit> &literals)
+{
+    StreamBuffer in(input_stream);
+    readClause(in, literals);
+}
+
 } // namespace Minisat
 
 #endif
