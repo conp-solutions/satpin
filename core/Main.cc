@@ -25,6 +25,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 
 #include "core/Dimacs.h"
 #include "core/Solver.h"
+#include "mtl/Sort.h"
 #include "utils/Options.h"
 #include "utils/ParseUtils.h"
 #include "utils/System.h"
@@ -78,9 +79,9 @@ static void SIGINT_exit(int signum)
 int main(int argc, char **argv)
 {
     try {
+        printf("\nSATPin v1.0\n\n");
         setUsageHelp("USAGE: %s [options] <input-file> <result-output-file>\n\n  where input may be either in plain or "
                      "gzipped DIMACS.\n");
-        // printf("This is MiniSat 2.0 beta\n");
 
 #if defined(__linux__)
         fpu_control_t oldcw, newcw;
@@ -94,6 +95,15 @@ int main(int argc, char **argv)
         IntOption verb("MAIN", "verb", "Verbosity level (0=silent, 1=some, 2=more).", 1, IntRange(0, 2));
         IntOption cpu_lim("MAIN", "cpu-lim", "Limit on CPU time allowed in seconds.\n", INT32_MAX, IntRange(0, INT32_MAX));
         IntOption mem_lim("MAIN", "mem-lim", "Limit on memory usage in megabytes.\n", INT32_MAX, IntRange(0, INT32_MAX));
+
+
+        /*   Norbert:
+         *   EL reasoner options
+         */
+        StringOption assumptionFile("EL", "assumptions", "file with the list of assumtion literals", 0);
+        StringOption questionFile("EL", "question", "file with the question literal", 0);
+        StringOption gcnfFile("EL", "toGCNF", "to write GCNF problem to", 0);
+        IntOption rotateAssumptions("EL", "rotate", "Enumerate conflicts (0=no,1=yes)", 1, IntRange(0, 1));
 
         parseOptions(argc, argv, true);
 
@@ -171,8 +181,58 @@ int main(int argc, char **argv)
             exit(20);
         }
 
+
         vec<Lit> dummy;
-        lbool ret = S.solveLimited(dummy);
+
+        /*   Norbert:
+         *   Parse assumptions for EL reasoning
+         */
+        vec<Lit> parsedAssumptions;  // vector that stores the assumption literals from the file
+        Lit questionLit = lit_Undef; // literal that should be implied by F and the assumptions
+        if (assumptionFile != 0) {
+            gzFile assumptionsIn = gzopen(assumptionFile, "rb"); // open the file
+            printf("parse assumptions\n");
+            parse_clause(assumptionsIn, parsedAssumptions); // read the assumptions vector
+            gzclose(assumptionsIn);                         // close the file
+
+            for (int i = 0; i < parsedAssumptions.size(); ++i) // make sure the solver knows about all variables
+                while (var(parsedAssumptions[i]) >= S.nVars()) S.newVar();
+        }
+        if (questionFile != 0) { // read the literal for the question
+            vec<Lit> questionLits;
+            gzFile questionIn = gzopen(questionFile, "rb"); // open the file
+            printf("parse questions\n");
+            parse_clause(questionIn, questionLits); // read the question vector
+            gzclose(questionIn);                    // close the file
+            if (questionLits.size() != 1) {
+                printf("Warning: Expected one question literal, found %d\n", questionLits.size());
+                exit(3);
+            }
+            questionLit = questionLits[0];                    // use a single literal
+            while (var(questionLit) >= S.nVars()) S.newVar(); // make sure the solver knows about all variables
+        }
+
+        if (gcnfFile != 0) {
+            if (assumptionFile == 0 || questionFile == 0) {
+                printf("Warning: printing GCNF without the full question and assumption information\n");
+            }
+            S.toGroupMUS((const char *)gcnfFile, parsedAssumptions, questionLit);
+            exit(0);
+        }
+
+        lbool ret = l_Undef;
+
+        if (rotateAssumptions == 2 && dummy.size() > 63) { // check for complexity of algorithm 2
+            printf("Warning: Cannot handle more than 63 variables for full iterations\n"); //
+            exit(3);
+        }
+
+        if (rotateAssumptions > 0) {
+            ret = S.findImplications(parsedAssumptions, questionLit, rotateAssumptions);
+        } else {
+            ret = S.solveLimited(dummy);
+        }
+
         if (S.verbosity > 0) {
             printStats(S);
             printf("\n");
