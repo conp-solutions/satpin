@@ -1,9 +1,22 @@
+
+SATPin implements Axiom pinpointing, basically identifying all sets of axioms
+that together imply another axiom.
+
+See the following for details:
+
+@inproceedings{manthey2016efficient,
+title={Efficient Axiom Pinpointing in EL using SAT Technology.},
+author={Manthey, Norbert and Penaloza, Rafael and Rudolph, Sebastian},
+booktitle={Description Logics},
+year={2016}
+}
+
 ================================================================================
 DIRECTORY OVERVIEW:
 
 mtl/            Mini Template Library
 utils/          Generic helper code (I/O, Parsing, CPU-time, etc)
-core/           A core version of the solver
+core/           A core version of the solver, as well as SATPin specifics
 simp/           An extended solver with simplification capabilities
 README
 LICENSE
@@ -11,14 +24,29 @@ LICENSE
 ================================================================================
 BUILDING: (release version: without assertions, statically linked, etc)
 
-export MROOT=<minisat-dir>              (or setenv in cshell)
-cd { core | simp }
-gmake rs
-cp minisat_static <install-dir>/minisat
+Standalone SATPin binary, using internal solver:
+make rs  # release version
+make d   # debug version
+
+SATPin binary, using IPASIR binary
+make rs LIBSOLVER="<path-to-static-ipasir-library> <ipasir-link-flags>"
 
 ================================================================================
 EXAMPLES:
 
-Run minisat with same heuristics as version 2.0:
+SATPin requires several files to run Axiom Pin Pointing: The basic encoding of
+the ontology, a file that lists the variables that represent activating axioms
+to be included, as well as a question file, which points to the axiom that
+should be implied.
 
-> minisat <cnf-file> -no-luby -rinc=1.5 -phase-saving=0 -rnd-freq=0.02
+BENCHMARK=full
+QUERY="query.sorted.10"
+./satpin benchmark/"$BENCHMARK".cnf \
+         -assumptions=benchmark/"$BENCHMARK".assumptions \
+         -question=benchmark/"$BENCHMARK"."$QUERY"
+
+See the following on how to generate the required files:
+
+Sebastiani, R., Vescovi, M.: Axiom pinpointing in large EL+ ontologies via SAT
+and SMT techniques. Technical Report DISI-15-010, DISI, University of Trento,
+Italy, April 2015. http://disi.unitn.it/rseba/elsat/elsat_techrep.pdf
