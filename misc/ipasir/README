@@ -1,0 +1,14 @@
+Norbert Manthey, 2017
+
+SATPin computes Axiom Pinpointing for ontologies in EL. It is based on Minisat,
+and is capable of using an external SAT solver for incremental calls.
+
+See [1] and [2] for more details.
+
+[1] Norbert Manthey, Rafael Peñaloza, Sebastian Rudolph
+Efficient Axiom Pinpointing in EL using SAT Technology
+In Maurizio Lenzerini, Rafael Peñaloza, eds., Proceedings of the 29th International Workshop on Description Logics (DL'16), volume 1577, 2016. CEUR Workshop Proceedings
+
+[2] Norbert Manthey, Rafael Peñaloza, Sebastian Rudolph
+SATPin -- Efficient Axiom Pinpointing for Lightweight Description Logics Using SAT Solving Technology
+Journal of Automated Reasoning, submitted.
