@@ -29,7 +29,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 // Some sorting algorithms for vec's
 
 
-namespace Minisat
+namespace SATPin
 {
 
 template <class T> struct LessThan_default {
@@ -103,6 +103,6 @@ template <class T, class LessThan> void sort(std::vector<T> &v, LessThan lt) { s
 template <class T> void sort(std::vector<T> &v) { sort(v, LessThan_default<T>()); }
 
 //=================================================================================================
-} // namespace Minisat
+} // namespace SATPin
 
 #endif

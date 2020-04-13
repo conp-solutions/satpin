@@ -39,7 +39,7 @@ extern "C" {
 
 #include <core/SolverTypes.h>
 
-namespace Minisat
+namespace SATPin
 {
 
 class SATSolver
@@ -159,6 +159,6 @@ class SATSolver
     }
 };
 
-} // namespace Minisat
+} // namespace SATPin
 
 #endif

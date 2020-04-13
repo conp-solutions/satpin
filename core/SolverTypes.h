@@ -30,7 +30,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "mtl/Map.h"
 #include "mtl/Vec.h"
 
-namespace Minisat
+namespace SATPin
 {
 
 //=================================================================================================
@@ -467,6 +467,6 @@ inline void Clause::strengthen(Lit p)
 }
 
 //=================================================================================================
-} // namespace Minisat
+} // namespace SATPin
 
 #endif

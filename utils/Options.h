@@ -29,7 +29,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "mtl/Vec.h"
 #include "utils/ParseUtils.h"
 
-namespace Minisat
+namespace SATPin
 {
 
 //==================================================================================================
@@ -422,6 +422,6 @@ class BoolOption : public Option
 };
 
 //=================================================================================================
-} // namespace Minisat
+} // namespace SATPin
 
 #endif

@@ -26,7 +26,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 
 #include "core/SATSolver.h"
 
-using namespace Minisat;
+using namespace SATPin;
 
 #include "utils/System.h" // for the cputime
 #include <sstream>

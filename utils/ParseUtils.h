@@ -26,7 +26,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 
 #include <zlib.h>
 
-namespace Minisat
+namespace SATPin
 {
 
 //-------------------------------------------------------------------------------------------------
@@ -132,6 +132,6 @@ template <class B> static bool eagerMatch(B &in, const char *str)
 
 
 //=================================================================================================
-} // namespace Minisat
+} // namespace SATPin
 
 #endif

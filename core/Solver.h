@@ -30,7 +30,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include <iostream>
 #include <vector>
 
-namespace Minisat
+namespace SATPin
 {
 
 //=================================================================================================
@@ -592,6 +592,6 @@ inline void Solver::toDimacs(const char *file, Lit p, Lit q, Lit r)
 
 
 //=================================================================================================
-} // namespace Minisat
+} // namespace SATPin
 
 #endif

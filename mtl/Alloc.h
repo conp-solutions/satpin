@@ -24,7 +24,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "mtl/Vec.h"
 #include "mtl/XAlloc.h"
 
-namespace Minisat
+namespace SATPin
 {
 
 //=================================================================================================
@@ -141,6 +141,6 @@ template <class T> typename RegionAllocator<T>::Ref RegionAllocator<T>::alloc(in
 
 
 //=================================================================================================
-} // namespace Minisat
+} // namespace SATPin
 
 #endif

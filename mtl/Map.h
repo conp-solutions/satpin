@@ -23,7 +23,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "mtl/IntTypes.h"
 #include "mtl/Vec.h"
 
-namespace Minisat
+namespace SATPin
 {
 
 //=================================================================================================
@@ -217,6 +217,6 @@ template <class K, class D, class H = Hash<K>, class E = Equal<K> > class Map
 };
 
 //=================================================================================================
-} // namespace Minisat
+} // namespace SATPin
 
 #endif

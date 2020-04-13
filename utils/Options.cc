@@ -21,9 +21,9 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "mtl/Sort.h"
 #include "utils/ParseUtils.h"
 
-using namespace Minisat;
+using namespace SATPin;
 
-void Minisat::parseOptions(int &argc, char **argv, bool strict)
+void SATPin::parseOptions(int &argc, char **argv, bool strict)
 {
     int i, j;
     for (i = j = 1; i < argc; i++) {
@@ -56,9 +56,9 @@ void Minisat::parseOptions(int &argc, char **argv, bool strict)
 }
 
 
-void Minisat::setUsageHelp(const char *str) { Option::getUsageString() = str; }
-void Minisat::setHelpPrefixStr(const char *str) { Option::getHelpPrefixString() = str; }
-void Minisat::printUsageAndExit(int argc, char **argv, bool verbose)
+void SATPin::setUsageHelp(const char *str) { Option::getUsageString() = str; }
+void SATPin::setHelpPrefixStr(const char *str) { Option::getHelpPrefixString() = str; }
+void SATPin::printUsageAndExit(int argc, char **argv, bool verbose)
 {
     const char *usage = Option::getUsageString();
     if (usage != NULL) fprintf(stderr, usage, argv[0]);
