@@ -1,0 +1,65 @@
+\documentclass[conference]{IEEEtran}
+% packages
+\usepackage{xspace}
+\usepackage{hyperref}
+\usepackage{todonotes}
+\usepackage{tikz}
+\usepackage[utf8]{inputenc}
+
+\def\CC{{C\nolinebreak[4]\hspace{-.05em}\raisebox{.4ex}{\tiny\bf ++}}}
+\def\ea{\,et\,al.\ }
+
+\begin{document}
+	
+% paper title
+\title{Axiom Pinpointing Benchmarks for IPASIR Solvers}
+
+% author names and affiliations
+% use a multiple column layout for up to three different
+% affiliations
+\author{
+\IEEEauthorblockN{Norbert Manthey}
+\IEEEauthorblockA{nmanthey@conp-solutions.com\\Dresden, Germany}
+}
+
+\maketitle
+
+\def\satpin{\textsc{SATPin}\xspace}
+
+% the abstract is optional
+\begin{abstract}
+This document briefly describes the axiom pinpointing benchmarks that have been submitted to the incremental track.
+In CNF form, axiom pin pointing searches for all subsets of a set of assumptions that make the formula unsatisfiable.
+\end{abstract}
+
+\section{Introduction}
+
+In the description logic EL+, axiom pinpointing is the computations of all minimal subsets of axioms that imply another axiom in an ontology~\cite{BaBL-IJCAI05}.
+The task can be solved with SMT or SAT solvers, by converting the input problem accordingly~\cite{SeVe15}.
+The submitted benchmarks are based on the tool \satpin~\cite{MaPR16,MaPR-KI20}, which allows to use SAT solvers via the IPASIR interface.
+\satpin also uses a modified \textsc{MiniSat} solver, heavily modifying the way incremental solving is done to speedup solving iterations.
+Experiments show, that at in 2015 IPASIR solvers could not keep up with this modified solver.
+Modifications include to avoid fully restarting the SAT solver between iterations, i.e. keeping as many decision levels as possible and adding new clauses while the interpretation is non-empty; testing whether an out-of-order assumption is already falsified before consider the next assumption as a decision; or sorting assumption literals to have stable assumptions in the front of the stack.
+The last mentioned modification results in automatically computing subset-free answers for the axiom pinpointing problem.
+Without this modification, more SAT calls might be required.
+See~\cite{MaPR16,MaPR-KI20} for more details.
+
+\newpage
+
+\section{The Submitted Benchmark}
+
+The submitted benchmark is based on the ontology \emph{FullGalen}, that has been converted to the CNF form~\cite{SeVe15}.
+\satpin is called as usual, except that the backend is an IPASIR solvers.
+The tool will react to the answers reported by the IPASIR solvers, i.e. in case not all subsets that result in an unsatisfiable formula have been found, the SAT solver will be called again.
+Hence, finding small answers is beneficial, as it potentially avoids redundant SAT solver calls.
+
+\section{Availability}
+
+\satpin is publicly available under the MIT license at \url{https://github.com/conp-solutions/satpin}.
+The file \emph{README} in the repository explains how to link IPASIR solvers, as well as how to call the tool with the converted anthologies.
+
+
+\bibliographystyle{IEEEtranS}
+\bibliography{local}
+
+\end{document}
